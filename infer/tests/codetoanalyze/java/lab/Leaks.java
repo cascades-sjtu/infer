@@ -39,4 +39,19 @@ public class Leaks {
     stream1.close();
     stream2.close();
   }
+
+  void FN_leakBad() throws IOException, FileNotFoundException {
+    FileInputStream stream1 = new FileInputStream("file.txt");
+    FileInputStream stream2 = new FileInputStream("file.txt");
+    stream1.close();
+    // double close stream1 but not close stream2
+    stream1.close();
+  }
+
+  void FP_noleakOk() throws IOException, FileNotFoundException {
+    FileInputStream stream1 = new FileInputStream("file.txt");
+    FileInputStream stream2 = new FileInputStream(stream1.getFD());
+    stream1.close();
+    // stream2 and stream1 are alising to the same file object
+  }
 }

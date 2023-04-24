@@ -8,7 +8,7 @@
 open! IStd
 module F = Format
 
-type t = unit
+type t = int
 
 let leq ~lhs:_ ~rhs:_ = assert false
 
@@ -16,8 +16,14 @@ let join _a _b = assert false
 
 let widen ~prev:_ ~next:_ ~num_iters:_ = assert false
 
-let pp fmt () = F.fprintf fmt "(nothing)"
+let pp fmt astate = F.fprintf fmt "%d" astate
 
-let initial = ()
+let acquire_resource astate = astate + 1
+
+let release_resource astate = astate - 1
+
+let has_leak astate = astate > 0
+
+let initial = 0
 
 type summary = t

@@ -18,3 +18,7 @@ val acquire_resource : t -> t
 val release_resource : t -> t
 
 val has_leak : t -> bool
+
+val apply_summary : summary:t -> t -> t
+
+val record_return_resource : t -> t

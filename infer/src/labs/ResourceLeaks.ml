@@ -46,14 +46,24 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
 
   (** Take an abstract state and instruction, produce a new abstract state *)
   let exec_instr (astate : ResourceLeakDomain.t)
-      {InterproceduralAnalysis.proc_desc= _; tenv; analyze_dependency= _; _} _ _ (instr : HilInstr.t)
-      =
+      {InterproceduralAnalysis.proc_desc= _; tenv; analyze_dependency; _} _ _ (instr : HilInstr.t) =
     match instr with
-    | Call (_return_opt, Direct callee_procname, _actuals, _, _loc) ->
-        (* function call [return_opt] := invoke [callee_procname]([actuals]) *)
-        if acquires_resource tenv callee_procname then Domain.acquire_resource astate
+    | Call (_return_opt, Direct callee_procname, _actuals, _, _loc) -> (
+        if
+          (* function call [return_opt] := invoke [callee_procname]([actuals]) *)
+          acquires_resource tenv callee_procname
+        then Domain.acquire_resource astate
         else if releases_resource tenv callee_procname then Domain.release_resource astate
-        else astate
+        else
+          match analyze_dependency callee_procname with
+          | Some callee_summary ->
+              ResourceLeakDomain.apply_summary ~summary:callee_summary astate
+          | None ->
+              astate )
+    | Assign
+        (Base (ret, {Typ.desc= Typ.Tptr ({Typ.desc= Typ.Tstruct ret_typename}, _)}), _rhs_exp, _loc)
+      when Var.is_return ret && is_closeable_typename tenv ret_typename ->
+        ResourceLeakDomain.record_return_resource astate |> ResourceLeakDomain.release_resource
     | Assign (_lhs_access_path, _rhs_exp, _loc) ->
         (* an assignment [lhs_access_path] := [rhs_exp] *)
         astate

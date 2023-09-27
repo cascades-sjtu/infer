@@ -55,7 +55,7 @@ let all_fields =
     ~purity:(fun f -> mk f Purity PurityDomain.pp_summary)
     ~quandary:(fun f -> mk f Quandary QuandarySummary.pp)
     ~racerd:(fun f -> mk f RacerD RacerDDomain.pp_summary)
-    ~lab_resource_leaks:(fun f -> mk f LabResourceLeaks ResourceLeakDomain.pp)
+    ~lab_resource_leaks:(fun f -> mk f LabResourceLeaks ResourceLeakDomain.Summary.pp)
     ~scope_leakage:(fun f -> mk f ScopeLeakage ScopeLeakage.Summary.pp)
     ~siof:(fun f -> mk f SIOF SiofDomain.Summary.pp)
     ~lineage:(fun f -> mk f Lineage Lineage.Summary.pp)

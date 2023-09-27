@@ -13,12 +13,13 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
   module CFG = CFG
   module Domain = ResourceLeakDomain
 
-  type analysis_data = ResourceLeakDomain.t InterproceduralAnalysis.t
+  type analysis_data = ResourceLeakDomain.Summary.t InterproceduralAnalysis.t
 
   let is_closeable_typename tenv typename =
+    L.d_printfln "is_closeable_typename: %s" (Typ.Name.name typename) ;
     let is_closable_interface typename _ =
       match Typ.Name.name typename with
-      | "java.io.AutoCloseable" | "java.io.Closeable" ->
+      | "java.io.AutoCloseable" | "java.io.Closeable" | "java.io.FileInputStream" ->
           true
       | _ ->
           false
@@ -34,30 +35,40 @@ module TransferFunctions (CFG : ProcCfg.S) = struct
         false
 
 
-  let _acquires_resource tenv procname =
+  let acquires_resource tenv procname =
     (* We assume all constructors of a subclass of [Closeable] acquire a resource *)
     Procname.is_constructor procname && is_closeable_procname tenv procname
 
 
-  let _releases_resource tenv procname =
+  let releases_resource tenv procname =
     (* We assume the [close] method of a [Closeable] releases all of its resources *)
-    String.equal "close" (Procname.get_method procname) && is_closeable_procname tenv procname
+    String.equal "close" (Procname.get_method procname) || is_closeable_procname tenv procname
 
 
   (** Take an abstract state and instruction, produce a new abstract state *)
   let exec_instr (astate : ResourceLeakDomain.t)
-      {InterproceduralAnalysis.proc_desc= _; tenv= _; analyze_dependency= _; _} _ _
-      (instr : Sil.instr) =
+      {InterproceduralAnalysis.proc_desc= _; tenv; analyze_dependency; _} _ _ (instr : Sil.instr) =
     match instr with
-    | Call (_return, Const (Cfun _callee_proc_name), _actuals, _loc, _) ->
-        (* function call of the form [_return = _callee_proc_name(..._actuals)] *)
-        astate
-    | Load {id= _lhs; e= _rhs; typ= _lhs_typ; loc= _loc} ->
+    (* Call ((ret_id, ret_typ), e_fun, arg_ts, loc, call_flags) represents an instruction ret_id = e_fun(arg_ts); *)
+    | Call (_return, Const (Cfun callee_proc_name), first_actual :: _actuals, _loc, _)
+      when acquires_resource tenv callee_proc_name ->
+        ResourceLeakDomain.acquire_resource first_actual astate
+    | Call (_return, Const (Cfun callee_proc_name), [first_actual], _loc, _)
+      when releases_resource tenv callee_proc_name ->
+        ResourceLeakDomain.release_resource first_actual astate
+    (* use inter-procedual summary *)
+    | Call (return, Const (Cfun callee_proc_name), actuals, _loc, _) -> (
+      match analyze_dependency callee_proc_name with
+      | Some callee_summary ->
+          ResourceLeakDomain.Summary.apply ~callee:callee_summary ~return ~actuals astate
+      | None ->
+          astate )
+    | Load {id= lhs; e= rhs; typ= lhs_typ; loc= _loc} ->
         (* load of an address [_lhs:_lhs_typ = *_rhs] *)
-        astate
-    | Store {e1= _lhs; e2= _rhs; typ= _rhs_typ; loc= _loc} ->
+        ResourceLeakDomain.load (lhs, lhs_typ) rhs astate
+    | Store {e1= lhs; e2= rhs; typ= rhs_typ; loc= _loc} ->
         (* store at an address [*_lhs = _rhs:_rhs_typ] *)
-        astate
+        ResourceLeakDomain.store ~lhs ~rhs:(rhs, rhs_typ) astate
     | Prune (_assume_exp, _loc, _, _) ->
         (* a conditional [assume(assume_exp)] blocks if [assume_exp] evaluates to false *)
         astate
@@ -80,9 +91,8 @@ module CFG = ProcCfg.Normal
 module Analyzer = AbstractInterpreter.MakeRPO (TransferFunctions (CFG))
 
 (** Report an error when we have acquired more resources than we have released *)
-let report_if_leak {InterproceduralAnalysis.proc_desc; err_log; _} post =
-  let change_me = false in
-  if change_me then
+let report_if_leak {InterproceduralAnalysis.proc_desc; err_log; _} formal_map post =
+  if ResourceLeakDomain.has_leak formal_map post then
     let last_loc = Procdesc.Node.get_loc (Procdesc.get_exit_node proc_desc) in
     let message = F.asprintf "Leaked %a resource(s)" ResourceLeakDomain.pp post in
     Reporting.log_issue proc_desc err_log ~loc:last_loc ResourceLeakLabExercise
@@ -92,5 +102,7 @@ let report_if_leak {InterproceduralAnalysis.proc_desc; err_log; _} post =
 (** Main function into the checker; registered in {!RegisterCheckers} *)
 let checker ({InterproceduralAnalysis.proc_desc} as analysis_data) =
   let result = Analyzer.compute_post analysis_data ~initial:ResourceLeakDomain.initial proc_desc in
-  Option.iter result ~f:(fun post -> report_if_leak analysis_data post) ;
-  result
+  Option.map result ~f:(fun post ->
+      let formal_map = FormalMap.make (Procdesc.get_attributes proc_desc) in
+      report_if_leak analysis_data formal_map post ;
+      ResourceLeakDomain.Summary.make formal_map post )
